@@ -521,6 +521,9 @@ class Bot
             case preg_match('~^/resetAmnezia (-?\d+)$~', $this->input['callback'], $m):
                 $this->resetAmnezia($m[1]);
                 break;
+            case preg_match('~^/reduceAmnezia (-?\d+)$~', $this->input['callback'], $m):
+                $this->reduceAmnezia($m[1]);
+                break;
             case preg_match('~^/switchExchange (\d+)$~', $this->input['callback'], $m):
                 $this->switchExchange($m[1]);
                 break;
@@ -2077,15 +2080,29 @@ class Bot
         $this->switchAmnezia($page, 1);
     }
 
-    public function switchAmnezia($page = 0, $reset = false)
+    public function reduceAmnezia($page = 0) {
+        $this->switchAmnezia($page, false, 1);
+    }
+
+    public function switchAmnezia($page = 0, $reset = false, $reduce = false)
     {
         $c = $this->getPacConf();
-        if (empty($reset)) {
-            $amnezia = $c[$this->getInstanceWG(1) . 'amnezia'] = $c[$this->getInstanceWG(1) . 'amnezia'] ? 0 : 1;
-        } else {
-            $amnezia = 1;
-            unset($c[$this->getInstanceWG(1) . 'amnezia_keys']);
-            unset($c[$this->getInstanceWG(1) . 'presharedkey']);
+        switch (true) {
+            case !empty($reset):
+                $amnezia = 1;
+                unset($c[$this->getInstanceWG(1) . 'amnezia_keys']);
+                unset($c[$this->getInstanceWG(1) . 'presharedkey']);
+                break;
+            case !empty($reduce):
+                $amnezia = 1;
+                unset($c[$this->getInstanceWG(1) . 'amnezia_keys']['S3']);
+                unset($c[$this->getInstanceWG(1) . 'amnezia_keys']['S4']);
+                unset($c[$this->getInstanceWG(1) . 'amnezia_keys']['I1']);
+                break;
+
+            default:
+                $amnezia = $c[$this->getInstanceWG(1) . 'amnezia'] = $c[$this->getInstanceWG(1) . 'amnezia'] ? 0 : 1;
+                break;
         }
         $this->setPacConf($c);
 
@@ -2141,7 +2158,7 @@ class Bot
                 unset($wg['peers'][$k]['PresharedKey']);
             }
         }
-        $this->restartWG($this->createConfig($wg), 1);
+        $this->restartWG($this->createConfig($wg), !$reset && !$reduce);
         $this->menu('wg', $page);
     }
 
@@ -3404,6 +3421,10 @@ DNS-over-HTTPS with IP:
                     'text'          => "reset obf-keys",
                     'callback_data' => "/resetAmnezia $page",
                 ],
+                [
+                    'text'          => "reduce to 1",
+                    'callback_data' => "/reduceAmnezia $page",
+                ],
             ]);
         }
         array_unshift($data, [
@@ -3823,14 +3844,17 @@ DNS-over-HTTPS with IP:
         $pac     = $this->getPacConf();
         $dnsRaw  = $client['interface']['DNS'] ?: $pac[$this->getInstanceWG(1) . 'dns'] ?: $this->dns;
         $dns     = array_map('trim', explode(',', $dnsRaw));
-        $wgPort  = (int) getenv($this->getInstanceWG() == 'wg1' ? 'WG1PORT' : 'WGPORT');
+        $wgPort      = (int) getenv($this->getInstanceWG() == 'wg1' ? 'WG1PORT' : 'WGPORT');
+        $amneziaKeys   = $this->amneziaKeys();
+        $protoVer      = array_key_exists('I1', $amneziaKeys) ? "2" : "1";
+        $containerName = $protoVer === "2" ? "amnezia-awg2" : "amnezia-awg";
         $c   = [
             "containers" => [
                 [
                     "awg" => [
                         "isThirdPartyConfig" => true,
-                        "last_config" => json_encode(array_merge(array_map('strval', $this->amneziaKeys()), [
-                            "protocol_version" => "2",
+                        "last_config" => json_encode(array_merge(array_map('strval', $amneziaKeys), [
+                            "protocol_version" => $protoVer,
                             "client_ip"        => $client['interface']['Address'],
                             "client_priv_key"  => $client['interface']['PrivateKey'],
                             "client_pub_key"   => "0",
@@ -3844,12 +3868,12 @@ DNS-over-HTTPS with IP:
                         ])),
                         "port" => $wgPort,
                         "transport_proto" => "udp",
-                        "protocol_version" => "2"
+                        "protocol_version" => $protoVer
                     ],
-                    "container" => "amnezia-awg2"
+                    "container" => $containerName
                 ]
             ],
-            "defaultContainer"  => "amnezia-awg2",
+            "defaultContainer"  => $containerName,
             "description"       => $client['interface']['## name'],
             "dns1"              => $dns[0] ?? '',
             "dns2"              => $dns[1] ?? '',
@@ -9557,12 +9581,8 @@ DNS-over-HTTPS with IP:
     public function restartWG($conf_str, $switch = false)
     {
         $this->ssh("echo '$conf_str' > /etc/wireguard/wg0.conf", $this->getInstanceWG());
-        if (!empty($switch)) {
-            $this->ssh("{$this->getWGType(1)}-quick down wg0", $this->getInstanceWG());
-            $this->ssh("{$this->getWGType()}-quick up wg0", $this->getInstanceWG());
-        } else {
-            $this->ssh("{$this->getWGType()} syncconf wg0 <({$this->getWGType()}-quick strip wg0)", $this->getInstanceWG());
-        }
+        $this->ssh("{$this->getWGType((int) $switch)}-quick down wg0", $this->getInstanceWG());
+        $this->ssh("{$this->getWGType()}-quick up wg0", $this->getInstanceWG());
         return true;
     }
 
