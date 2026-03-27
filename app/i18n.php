@@ -261,6 +261,10 @@ $i = [
         'en' => 'setSecret',
         'ru' => 'установить свой ключ',
     ],
+    'setAdTag'  => [
+        'en' => 'set adtag',
+        'ru' => 'установить adtag',
+    ],
     'defaultDNS'  => [
         'en' => 'defaultDNS',
         'ru' => 'дефолтный днс',
